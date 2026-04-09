@@ -219,22 +219,101 @@ CUDA_VISIBLE_DEVICES=0,1 vllm serve /path/to/CoPaw-Flash-9B \
   --port 8000
 ```
 
+### Production Deployment with Tool Calling Support
+
+For agent applications that require reasoning visibility and tool calling, add these parameters:
+
+```bash
+export HF_TOKEN=your_huggingface_token
+
+CUDA_VISIBLE_DEVICES=0,1 vllm serve agentscope-ai/CoPaw-Flash-9B \
+  --enable-lora \
+  --lora-modules agent-lora=jason1966/CoPaw-Flash-9B-Agent-LoRA \
+  --max-lora-rank 64 \
+  --tensor-parallel-size 2 \
+  --gpu-memory-utilization 0.85 \
+  --max-model-len 131072 \
+  --gdn-prefill-backend triton \
+  --trust-remote-code \
+  --reasoning-parser qwen3 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_xml \
+  --port 8000
+```
+
+**Key additions:**
+- `--reasoning-parser qwen3`: Enable reasoning process visibility (exposes model's thinking)
+- `--enable-auto-tool-choice`: Automatically select appropriate tools
+- `--tool-call-parser qwen3_xml`: Parse Qwen3's XML-format tool calls
+
+**Hardware specs:**
+- 2x NVIDIA H200 GPUs (141GB VRAM each)
+- 88 vCPU, 358GB RAM
+- KV cache: ~104GB per GPU (supports 51x concurrency for 128K context)
+
+**Service endpoints:**
+- Base model: `agentscope-ai/CoPaw-Flash-9B`
+- LoRA adapter: `agent-lora`
+
+**Tested with:**
+- vLLM 0.19.1rc1
+- Transformers 5.5.1
+- CUDA 13.0
+- Python 3.12 (uv environment)
+
 ### Usage
 
+**Python client:**
 ```python
 import requests
 
-# Use LoRA adapter
+# Use LoRA adapter with reasoning
 response = requests.post("http://localhost:8000/v1/chat/completions", json={
     "model": "agent-lora",  # Specify LoRA adapter
     "messages": [{"role": "user", "content": "Analyze this dataset..."}],
+    "max_tokens": 2048,
 })
 
-# Or use base model
+# Response includes reasoning field when using qwen3 reasoning-parser
+print(response.json()["choices"][0]["message"]["reasoning"])  # Model's thought process
+print(response.json()["choices"][0]["message"]["content"])    # Final response
+print(response.json()["choices"][0]["message"]["tool_calls"]) # Tool invocations
+
+# Or use base model without LoRA
 response = requests.post("http://localhost:8000/v1/chat/completions", json={
-    "model": "/path/to/CoPaw-Flash-9B",  # Base model
+    "model": "agentscope-ai/CoPaw-Flash-9B",  # Base model
     "messages": [{"role": "user", "content": "..."}],
 })
+```
+
+**OpenAI-compatible client:**
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="unused"  # Not required for local vLLM
+)
+
+response = client.chat.completions.create(
+    model="agent-lora",
+    messages=[{"role": "user", "content": "Analyze sales data"}]
+)
+print(response.choices[0].message.content)
+```
+
+**Remote access:**
+If vLLM is listening on `0.0.0.0:8000`, you can access from other machines:
+```python
+client = OpenAI(
+    base_url="http://YOUR_SERVER_IP:8000/v1",
+    api_key="unused"
+)
+```
+
+**Check available models:**
+```bash
+curl http://localhost:8000/v1/models | jq
 ```
 
 ---
